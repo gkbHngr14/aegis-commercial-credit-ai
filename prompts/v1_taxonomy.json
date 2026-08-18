@@ -1,0 +1,44 @@
+{
+  "repository_version": "1.0.0",
+  "prompts": [
+    {
+      "prompt_id": "PROMPT-CREDIT-LOOKUP-001",
+      "category": "TYPE_1_LOOKUP",
+      "intent": "Single-Chunk Policy Lookup",
+      "system_instruction": "Extract credit policy facts without extrapolation.",
+      "user_template": "What is the primary borrowing limit under Section {section_id} for {borrower_name}?",
+      "expected_json_schema": {
+        "borrowing_limit": "string",
+        "citation_section": "string"
+      }
+    },
+    {
+      "prompt_id": "PROMPT-CREDIT-MH-001",
+      "category": "TYPE_2_MULTIHOP_GRAPH",
+      "intent": "HQ -> Subsidiary Legal Guarantee Overrides",
+      "system_instruction": "Analyze provided legal context and graph relationships. Never extrapolate beyond explicitly cited sections.",
+      "user_template": "Does subsidiary {subsidiary_name} act as a primary guarantor for {parent_company} under Section {section_id}? Check for superseding amendments.",
+      "expected_json_schema": {
+        "verdict": "GUARANTEED | NOT_GUARANTEED | UNCERTAIN",
+        "override_detected": true,
+        "citation_nodes": ["string"],
+        "reasoning_summary": "string"
+      }
+    },
+    {
+      "prompt_id": "PROMPT-CREDIT-TAB-001",
+      "category": "TYPE_3_TABULAR_VARIANCE",
+      "intent": "Tabular Covenant vs Draw Numerical Variance Analysis",
+      "system_instruction": "Extract reported tabular metrics and evaluate variance against facility limits.",
+      "user_template": "Compare reported {metric_name} of {reported_value} against the base policy limit of {base_policy_limit} for {borrower_name}. Allowed variance threshold is {threshold_variance_percent}.",
+      "expected_json_schema": {
+        "metric_name": "string",
+        "reported_value": "number",
+        "base_policy_limit": "number",
+        "variance_amount": "number",
+        "variance_exceeded": true,
+        "verdict": "COMPLIANT | VARIANCE_EXCEEDED"
+      }
+    }
+  ]
+}
