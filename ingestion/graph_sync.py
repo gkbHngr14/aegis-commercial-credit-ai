@@ -69,12 +69,16 @@ class GraphSyncEngine:
 
         except ValidationException as err:
             return {"status": "QUARANTINED", "error": str(err), "dlq_routed": True, "payload": raw_payload}
-
+            
     def query_clause_as_of(self, clause_id: str, as_of_date: str) -> Dict[str, Any]:
         edge_info = self.edges.get(clause_id)
         if edge_info and as_of_date >= edge_info["expiration_date"]:
             amd_id = edge_info["superseded_by"]
             node_data = self.nodes.get(amd_id, {})
             return {"node_id": amd_id, "is_amended": True, "text": node_data.get("text")}
-        
-        return {"node_id": clause_id, "is_amended": False, "text": "Original Clause Content"}
+
+        # Return actual text from original node if available
+        orig_node_data = self.nodes.get(clause_id, {})
+        orig_text = orig_node_data.get("text")
+
+        return {"node_id": clause_id, "is_amended": False, "text": orig_text}
