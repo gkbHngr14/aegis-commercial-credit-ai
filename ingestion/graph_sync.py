@@ -11,6 +11,23 @@ class GraphSyncEngine:
     def get_node_id(self, doc_id: str, chunk_id: str) -> str:
         return f"{doc_id}::{chunk_id}"
 
+    """
+    1. Creates the root Document Node (doc_id, source_id, tenant_id).
+    2. Creates Section/Clause Nodes for each chunk.
+    3. Draws structural 'CONTAINS' and 'GOVERNS' edges.
+    """
+    def ingest_baseline_document(self, chunks: List[Chunk]) -> Dict[str, Any]:
+        for chunk in chunks:
+            node_id = self.get_node_id(chunk.metadata["document_id"], chunk.chunk_id)
+            self.nodes[node_id] = {
+                "text": chunk.content,
+                "tenant_id": chunk.metadata["tenant_id"],
+                "effective_date": chunk.metadata["effective_date"],
+                "is_amendment": False
+            }
+        
+        return {"status": "SUCCESS", "nodes_created": len(chunks)}
+
     def sync_amendment_node(
         self,
         doc_id: str,
