@@ -1,38 +1,29 @@
 import math
 from typing import List, Dict, Any, Optional
 from ingestion.graph_sync import GraphSyncEngine
+from retrieval.qdrant_store import QdrantVectorStore
 
 class HybridRetrievalEngine:
-    def __init__(self, graph_sync: GraphSyncEngine):
-        """
-        Injects the GraphSyncEngine dependency so the retriever can 
-        resolve active node versions based on as_of_date.
-        """
+    def __init__(self, graph_sync: GraphSyncEngine, vector_size: int = 3):
         self.graph_sync = graph_sync
-        # Simulated vector & text store mapping chunk_id -> {content, metadata, vector}
-        self.vector_store: Dict[str, Dict[str, Any]] = {}
+        self.qdrant = QdrantVectorStore(vector_size=vector_size)
+        # Store for Sparse BM25 evaluation
+        self.text_store: Dict[str, Dict[str, Any]] = {}
 
     def index_chunk(self, chunk_id: str, content: str, metadata: Dict[str, Any], vector: List[float]) -> None:
-        """Stores a chunk and its dense embedding in the local index."""
-        self.vector_store[chunk_id] = {
+        """Indexes chunk into both Qdrant (dense) and text_store (sparse BM25)."""
+        # 1. Upsert into Qdrant Vector Engine
+        self.qdrant.upsert_chunk(chunk_id=chunk_id, vector=vector, content=content, metadata=metadata)
+        
+        # 2. Store in text_store for BM25 search
+        self.text_store[chunk_id] = {
             "chunk_id": chunk_id,
             "content": content,
-            "metadata": metadata,
-            "vector": vector
+            "metadata": metadata
         }
 
-    def _cosine_similarity(self, vec_a: List[float], vec_b: List[float]) -> float:
-        """Calculates normalized cosine similarity between two vector embeddings."""
-        dot_product = sum(a * b for a, b in zip(vec_a, vec_b))
-        norm_a = math.sqrt(sum(a * a for a in vec_a))
-        norm_b = math.sqrt(sum(b * b for b in vec_b))
-        return dot_product / (norm_a * norm_b) if norm_a and norm_b else 0.0
-
     def _compute_bm25_score(self, query_text: str, doc_text: str) -> float:
-        """
-        Simplified BM25-style term frequency score for exact-match targeting
-        (e.g., matching section IDs like 'SEC-14.2' or exact numbers).
-        """
+        """BM25 term frequency calculation."""
         query_terms = query_text.lower().split()
         doc_terms = doc_text.lower().split()
         if not query_terms or not doc_terms:
@@ -43,7 +34,6 @@ class HybridRetrievalEngine:
         for term in query_terms:
             tf = doc_terms.count(term)
             if tf > 0:
-                # Saturation scoring formula for exact term hits
                 score += (tf * 2.2) / (tf + 1.2 * (1.0 - 0.75 + 0.75 * (doc_len / 50.0)))
         return score
 
@@ -56,55 +46,49 @@ class HybridRetrievalEngine:
         top_k: int = 3,
         rrf_k: int = 60
     ) -> List[Dict[str, Any]]:
-        """
-        Executes hybrid retrieval:
-        1. Layer 1 & 2: Dense Cosine & Sparse BM25 evaluation (Tenant Isolated).
-        2. Layer 3: Temporal Graph resolution (as_of_date edge traversal).
-        3. Layer 4: Reciprocal Rank Fusion (RRF) candidate merging.
-        """
-        # Pre-flight Tenant Security Guard
+        # Security Pre-flight Guard
         if not tenant_id or not tenant_id.startswith("TENANT-"):
-            raise ValueError(f"Security Violation: Unauthorized or invalid tenant_id '{tenant_id}'.")
+            raise ValueError(f"Security Violation: Unauthorized tenant_id '{tenant_id}'.")
 
-        # --- Step 1: Filter Store strictly by validated tenant_id ---
-        tenant_valid_chunks = [
-            doc for doc in self.vector_store.values()
-            if doc["metadata"].get("tenant_id") == tenant_id
-        ]
+        # --- Layer 1: Qdrant Engine Dense Search with Tenant Isolation ---
+        qdrant_dense_hits = self.qdrant.search_tenant_isolated(
+            query_vector=query_vector,
+            tenant_id=tenant_id,
+            limit=20
+        )
 
-        if not tenant_valid_chunks:
+        if not qdrant_dense_hits:
             return []
 
-        # --- Step 2: Layer 1 - Dense Vector Ranking ---
-        dense_ranked = sorted(
-            tenant_valid_chunks,
-            key=lambda doc: self._cosine_similarity(query_vector, doc["vector"]),
-            reverse=True
-        )
-        dense_ranks = {doc["chunk_id"]: rank for rank, doc in enumerate(dense_ranked, start=1)}
+        # Dense Ranks mapping: chunk_id -> rank
+        dense_ranks = {hit["chunk_id"]: rank for rank, hit in enumerate(qdrant_dense_hits, start=1)}
 
-        # --- Step 3: Layer 2 - Sparse BM25 Keyword Ranking ---
+        # --- Layer 2: Sparse BM25 Keyword Search ---
+        tenant_text_chunks = [
+            doc for doc in self.text_store.values()
+            if doc["metadata"].get("tenant_id") == tenant_id
+        ]
+        
         sparse_ranked = sorted(
-            tenant_valid_chunks,
+            tenant_text_chunks,
             key=lambda doc: self._compute_bm25_score(query_text, doc["content"]),
             reverse=True
         )
         sparse_ranks = {doc["chunk_id"]: rank for rank, doc in enumerate(sparse_ranked, start=1)}
 
-        # --- Step 4 & 5: Layer 3 & 4 - Temporal Graph Sync & RRF Fusion ---
+        # --- Layer 3 & 4: Temporal Graph Sync & RRF Fusion ---
         fused_results = []
-        for doc in tenant_valid_chunks:
-            cid = doc["chunk_id"]
-            meta = doc["metadata"]
+        for hit in qdrant_dense_hits:
+            cid = hit["chunk_id"]
+            meta = hit["metadata"]
             doc_id = meta.get("document_id", "DOC-UNK")
 
             # Point-in-time temporal resolution against GraphSyncEngine
             graph_node_key = self.graph_sync.get_node_id(doc_id, cid)
             temporal_state = self.graph_sync.query_clause_as_of(graph_node_key, as_of_date)
 
-            active_content = temporal_state.get("text") or doc["content"]
+            active_content = temporal_state.get("text") or hit["content"]
 
-            # Calculate RRF Score combining Dense and Sparse rankings
             r_dense = dense_ranks.get(cid, 999)
             r_sparse = sparse_ranks.get(cid, 999)
             rrf_score = (1.0 / (rrf_k + r_dense)) + (1.0 / (rrf_k + r_sparse))
@@ -118,6 +102,5 @@ class HybridRetrievalEngine:
                 "metadata": meta
             })
 
-        # Sort candidates by merged RRF score descending
         fused_results.sort(key=lambda x: x["rrf_score"], reverse=True)
         return fused_results[:top_k]

@@ -1,6 +1,6 @@
 import pytest
 from ingestion.graph_sync import GraphSyncEngine
-from retrieval.hybrid_engine import HybridRetrievalEngine
+from retrieval.hybrid_engine_dict import HybridRetrievalEngine
 
 @pytest.fixture
 def populated_retrieval_setup():
