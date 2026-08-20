@@ -1,5 +1,5 @@
 import pytest
-from agents.credit_graph import build_credit_graph
+from agents.credit_graph import build_credit_graph, HAS_POSTGRES
 
 def test_automated_approval_for_small_loan():
     app = build_credit_graph()
@@ -23,7 +23,6 @@ def test_automated_approval_for_small_loan():
         "audit_trail": []
     }
 
-    # Execute workflow
     for _ in app.stream(initial_state, thread_config):
         pass
 
@@ -56,7 +55,7 @@ def test_hitl_breakpoint_trigger_and_resume_approval():
         "audit_trail": []
     }
 
-    # 1. Stream execution - must pause BEFORE 'hitl_breakpoint'
+    # Stream execution - must pause BEFORE 'hitl_breakpoint'
     for _ in app.stream(large_loan_state, thread_config):
         pass
 
@@ -64,7 +63,7 @@ def test_hitl_breakpoint_trigger_and_resume_approval():
     assert paused_state.next == ("hitl_breakpoint",)
     assert paused_state.values["risk_score"] == 8.5
 
-    # 2. Simulate Credit Officer intervention & resume state
+    # Simulate Credit Officer intervention & resume state
     app.update_state(
         thread_config,
         {
@@ -73,7 +72,7 @@ def test_hitl_breakpoint_trigger_and_resume_approval():
         }
     )
 
-    # 3. Resume graph execution from pause
+    # Resume graph execution from pause
     for _ in app.stream(None, thread_config):
         pass
 
