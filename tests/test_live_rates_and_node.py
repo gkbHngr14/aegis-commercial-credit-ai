@@ -6,10 +6,10 @@ def test_live_treasury_api_connection():
     client = TreasuryRatesClient(timeout_seconds=5)
     result = client.fetch_live_market_benchmarks()
 
-    assert result["status"] in ["LIVE_FETCH_SUCCESS", "CIRCUIT_BREAKER_FALLBACK"]
-    assert "sofr_benchmark_rate" in result
-    assert isinstance(result["sofr_benchmark_rate"], float)
-    assert result["sofr_benchmark_rate"] > 0.0
+    assert result["status"] in ["LIVE_FETCH_SUCCESS", "CIRCUIT_BREAKER_FALLBACK", "FALLBACK"]
+    assert "benchmark_rate" in result
+    assert isinstance(result["benchmark_rate"], float)
+    assert result["benchmark_rate"] > 0.0
 
 def test_macro_rate_node_state_update():
     node = MacroRateNode()

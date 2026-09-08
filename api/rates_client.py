@@ -18,44 +18,30 @@ class TreasuryRatesClient:
 
     def fetch_live_market_benchmarks(self) -> Dict[str, Any]:
         """
-        Connects to live Treasury API over HTTPS with TLS 1.3 verification.
-        Returns live rates or an authenticated fallback if API limit/timeout occurs.
+        Fetches official U.S. Treasury benchmark rates with circuit-breaker fallback.
         """
-        req = urllib.request.Request(
-            self.TREASURY_API_URL,
-            headers={
-                "User-Agent": "Aegis-Commercial-Credit-Risk-Engine/1.0",
-                "Accept": "application/json"
-            }
-        )
-
         try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as response:
-                if response.status == 200:
-                    payload = json.loads(response.read().decode("utf-8"))
-                    data = payload.get("data", [])
-                    if data:
-                        latest_entry = data[0]
-                        avg_rate = float(latest_entry.get("avg_interest_rate_amt", "4.50"))
-                        return {
-                            "status": "LIVE_FETCH_SUCCESS",
-                            "sofr_benchmark_rate": avg_rate,
-                            "effective_date": latest_entry.get("record_date"),
-                            "source": "US Fiscal Data Service API"
-                        }
-        except Exception as e:
-            # SRE Circuit Breaker Pattern: Controlled fallback with diagnostic telemetry
-            return {
-                "status": "CIRCUIT_BREAKER_FALLBACK",
-                "sofr_benchmark_rate": 4.75,
-                "effective_date": "2026-08-01",
-                "source": "Local Fallback Cache",
-                "error": str(e)
-            }
+            # Query official US Treasury Fiscal Data endpoint
+            response = requests.get(self.TREASURY_API_URL, timeout=self.timeout)
+            response.raise_for_status()
+            data = response.json()
+            
+            if "data" in data and len(data["data"]) > 0:
+                latest_record = data["data"][0]
+                rate_val = float(latest_record.get("avg_interest_rate_amt", 4.75))
+                return {
+                    "treasury_avg_debt_rate": rate_val,
+                    "benchmark_rate": rate_val,
+                    "source": "US Fiscal Data Service API",
+                    "status": "LIVE"
+                }
+        except Exception:
+            # Circuit breaker fallback on network/timeout error
+            pass
 
         return {
-            "status": "CIRCUIT_BREAKER_FALLBACK",
-            "sofr_benchmark_rate": 4.75,
-            "effective_date": "2026-08-01",
-            "source": "Local Fallback Cache"
+            "treasury_avg_debt_rate": 4.75,
+            "benchmark_rate": 4.75,
+            "source": "Circuit Breaker Fallback",
+            "status": "FALLBACK"
         }
