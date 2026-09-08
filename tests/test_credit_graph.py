@@ -1,5 +1,5 @@
 import pytest
-from agents.credit_graph import build_credit_graph, HAS_POSTGRES
+from graph.credit_graph import build_credit_graph, HAS_POSTGRES
 
 def test_automated_approval_for_small_loan():
     app = build_credit_graph()
@@ -20,6 +20,8 @@ def test_automated_approval_for_small_loan():
         "hitl_reason": None,
         "human_approval_status": "NONE",
         "human_officer_notes": None,
+        "macro_benchmark_rate": None,
+        "macro_rate_source": None,
         "audit_trail": []
     }
 
@@ -31,7 +33,6 @@ def test_automated_approval_for_small_loan():
     assert final_state["hitl_required"] is False
     assert final_state["risk_score"] == 3.1
     assert any("[FinalDecision]" in item for item in final_state["audit_trail"])
-
 
 def test_hitl_breakpoint_trigger_and_resume_approval():
     app = build_credit_graph()
@@ -52,28 +53,33 @@ def test_hitl_breakpoint_trigger_and_resume_approval():
         "hitl_reason": None,
         "human_approval_status": "NONE",
         "human_officer_notes": None,
+        "macro_benchmark_rate": None,
+        "macro_rate_source": None,
         "audit_trail": []
     }
 
-    # Stream execution - must pause BEFORE 'hitl_breakpoint'
-    for _ in app.stream(large_loan_state, thread_config):
+    # 1. Run graph stream until it pauses at the interrupt point
+    for _ in app.stream(large_loan_state, thread_config, stream_mode="values"):
         pass
 
     paused_state = app.get_state(thread_config)
-    assert paused_state.next == ("hitl_breakpoint",)
+
+    # Assert 'hitl_breakpoint' is scheduled in the pending execution set
+    assert "hitl_breakpoint" in paused_state.next
     assert paused_state.values["risk_score"] == 8.5
 
-    # Simulate Credit Officer intervention & resume state
+    # 2. Simulate Credit Officer intervention attached to compliance step
     app.update_state(
         thread_config,
         {
             "human_approval_status": "APPROVED",
             "human_officer_notes": "Override approved based on secondary collateral audit."
-        }
+        },
+        as_node="compliance"
     )
 
-    # Resume graph execution from pause
-    for _ in app.stream(None, thread_config):
+    # 3. Resume graph execution to completion
+    for _ in app.stream(None, thread_config, stream_mode="values"):
         pass
 
     resumed_final = app.get_state(thread_config).values

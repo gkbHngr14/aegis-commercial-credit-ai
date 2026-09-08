@@ -1,4 +1,5 @@
-from typing import TypedDict, List, Dict, Any, Optional
+import operator
+from typing import Annotated, TypedDict, List, Dict, Any, Optional
 from langgraph.graph import StateGraph, START, END
 from langgraph.checkpoint.memory import MemorySaver
 try:
@@ -7,6 +8,10 @@ try:
     HAS_POSTGRES = True
 except ImportError:
     HAS_POSTGRES = False
+
+from agents.macro_rate_node import MacroRateNode
+
+_macro_worker = MacroRateNode()
 
 # 1. Centralized Shared State Schema
 class CreditState(TypedDict):
@@ -24,7 +29,9 @@ class CreditState(TypedDict):
     hitl_reason: Optional[str]
     human_approval_status: str  # "NONE", "PENDING", "APPROVED", "REJECTED"
     human_officer_notes: Optional[str]
-    audit_trail: List[str]
+    macro_benchmark_rate: Optional[float]
+    macro_rate_source: Optional[str]
+    audit_trail: Annotated[List[str], operator.add]
 
 
 # 2. Node Implementations
@@ -34,9 +41,22 @@ def context_ingestion_node(state: CreditState) -> Dict[str, Any]:
     context_str = f"Borrower: {state['borrower_id']} | Facility: ${state['requested_amount']:,.2f}"
     return {
         "formatted_context": context_str,
-        "audit_trail": audit
+        "audit_trail": [f"[ContextIngestion] Ingested query for borrower {state['borrower_id']}"]
     }
 
+def macro_rate_step_node(state: CreditState) -> Dict[str, Any]:
+    audit = state.get("audit_trail", [])
+    # Call decoupled Treasury rates worker
+    rate_data = _macro_worker.rates_client.fetch_live_market_benchmarks()
+    live_sofr = rate_data.get("sofr_benchmark_rate", 4.75)
+    source = rate_data.get("source", "Unknown")
+    
+    audit.append(f"[MacroRateNode] Fetched rate benchmark: {live_sofr}% via {source}")
+    return {
+        "macro_benchmark_rate": live_sofr,
+        "macro_rate_source": source,
+        "audit_trail": [f"[MacroRateNode] Fetched rate benchmark: {live_sofr}% via {source}"]
+    }
 
 def risk_assessment_node(state: CreditState) -> Dict[str, Any]:
     amount = state["requested_amount"]
@@ -56,7 +76,7 @@ def risk_assessment_node(state: CreditState) -> Dict[str, Any]:
     return {
         "risk_score": score,
         "risk_analysis": analysis,
-        "audit_trail": audit
+        "audit_trail": [f"[RiskAssessment] Assessed Risk Score: {score}"]
     }
 
 
@@ -67,7 +87,7 @@ def compliance_node(state: CreditState) -> Dict[str, Any]:
     audit.append(f"[ComplianceGate] Tenant check for {tenant}: Passed={is_compliant}")
     return {
         "compliance_passed": is_compliant,
-        "audit_trail": audit
+        "audit_trail": [f"[ComplianceGate] Tenant check for {tenant}: Passed={is_compliant}"]
     }
 
 
@@ -94,7 +114,7 @@ def hitl_breakpoint_node(state: CreditState) -> Dict[str, Any]:
         "hitl_required": True,
         "hitl_reason": reason,
         "human_approval_status": status,
-        "audit_trail": audit
+        "audit_trail": [f"[HITL_Breakpoint] PAUSED for Credit Officer review. Reason: {reason}"]
     }
 
 
@@ -109,7 +129,7 @@ def final_decision_node(state: CreditState) -> Dict[str, Any]:
 
     audit.append(f"[FinalDecision] Workflow completed with status: {decision}")
     return {
-        "audit_trail": audit
+        "audit_trail": [f"[FinalDecision] Workflow completed with status: {decision}"]
     }
 
 
@@ -118,12 +138,15 @@ def build_credit_graph(checkpointer=None):
     builder = StateGraph(CreditState)
 
     builder.add_node("context_ingestion", context_ingestion_node)
+    builder.add_node("macro_rate_fetch", macro_rate_step_node) # <--- NEW NODE
     builder.add_node("risk_assessment", risk_assessment_node)
     builder.add_node("compliance", compliance_node)
     builder.add_node("hitl_breakpoint", hitl_breakpoint_node)
     builder.add_node("final_decision", final_decision_node)
 
     builder.add_edge(START, "context_ingestion")
+    builder.add_edge("context_ingestion", "macro_rate_fetch")  # <--- NEW EDGE
+    builder.add_edge("macro_rate_fetch", "risk_assessment")    # <--- NEW EDGE
     builder.add_edge("context_ingestion", "risk_assessment")
     builder.add_edge("risk_assessment", "compliance")
 
