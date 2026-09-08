@@ -64,7 +64,7 @@ def context_ingestion_node(state: CreditState) -> Dict[str, Any]:
             "hitl_reason": f"Ingestion Guard Failure: {'; '.join(errors)}",
             "audit_trail": [error_msg]
         }
-        
+
     context_str = f"Borrower: {state['borrower_id']} | Facility: ${state['requested_amount']:,.2f}"
     return {
         "formatted_context": context_str,
@@ -146,6 +146,14 @@ def final_decision_node(state: CreditState) -> Dict[str, Any]:
 
 # 4. Graph Assembly
 def build_credit_graph(checkpointer=None):
+    """
+    Assembles and compiles the credit evaluation StateGraph.
+    
+    Args:
+        checkpointer: Optional LangGraph BaseCheckpointSaver instance.
+                      Defaults to MemorySaver() if unprovided. Pass an instance
+                      of PostgresSaver for production state persistence.
+    """
     builder = StateGraph(CreditState)
 
     builder.add_node("context_ingestion", context_ingestion_node)
