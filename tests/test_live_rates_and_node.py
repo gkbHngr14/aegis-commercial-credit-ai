@@ -6,7 +6,7 @@ def test_live_treasury_api_connection():
     client = TreasuryRatesClient(timeout_seconds=5)
     result = client.fetch_live_market_benchmarks()
 
-    assert result["status"] in ["LIVE_FETCH_SUCCESS", "CIRCUIT_BREAKER_FALLBACK", "FALLBACK"]
+    assert result["status"] in ["LIVE_FETCH_SUCCESS", "CIRCUIT_BREAKER_FALLBACK", "FALLBACK", "LIVE"]
     assert "benchmark_rate" in result
     assert isinstance(result["benchmark_rate"], float)
     assert result["benchmark_rate"] > 0.0

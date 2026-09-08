@@ -13,6 +13,7 @@ except ImportError:
 from agents.macro_rate_node import MacroRateNode
 from agents.qdrant_retrieval_node import QdrantRetrievalNode
 from retrieval.qdrant_store import QdrantVectorStore
+from utils.data_guards import validate_credit_input_payload, IngestionValidationError
 
 # 1. Instantiate Shared Worker Singletons
 _macro_worker = MacroRateNode()
@@ -51,6 +52,19 @@ class CreditState(TypedDict):
 
 # 3. Graph Node Functions
 def context_ingestion_node(state: CreditState) -> Dict[str, Any]:
+    # Run data guard validation check
+    is_valid, errors = validate_credit_input_payload(state)
+    
+    if not is_valid:
+        error_msg = f"[ContextIngestion_GUARD_FAILURE] Payload validation failed: {'; '.join(errors)}"
+        # Return failing state flags so compliance/router can handle gracefully
+        return {
+            "compliance_passed": False,
+            "hitl_required": True,
+            "hitl_reason": f"Ingestion Guard Failure: {'; '.join(errors)}",
+            "audit_trail": [error_msg]
+        }
+        
     context_str = f"Borrower: {state['borrower_id']} | Facility: ${state['requested_amount']:,.2f}"
     return {
         "formatted_context": context_str,
@@ -62,13 +76,13 @@ def qdrant_retrieval_step_node(state: CreditState) -> Dict[str, Any]:
 
 def macro_rate_step_node(state: CreditState) -> Dict[str, Any]:
     rate_data = _macro_worker.rates_client.fetch_live_market_benchmarks()
-    live_sofr = rate_data.get("sofr_benchmark_rate", 4.75)
+    live_rate = rate_data.get("benchmark_rate", 4.75)
     source = rate_data.get("source", "Unknown")
     
     return {
-        "macro_benchmark_rate": live_sofr,
+        "macro_benchmark_rate": live_rate,
         "macro_rate_source": source,
-        "audit_trail": [f"[MacroRateNode] Fetched rate benchmark: {live_sofr}% via {source}"]
+        "audit_trail": [f"[MacroRateNode] Fetched benchmark rate: {live_rate}% via {source}"]
     }
 
 def risk_assessment_node(state: CreditState) -> Dict[str, Any]:
